@@ -1,0 +1,90 @@
+name: Check upstream and update PKGBUILD
+
+on:
+  schedule:
+    # 每天检查一次新版本
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl git
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          path: aur-repo
+
+      - name: Check latest trilium-py version
+        id: trilium-version
+        run: |
+          cd aur-repo
+          current=$(grep -oP '^pkgver=\K.*' PKGBUILD)
+          echo "current=$current" >> $GITHUB_OUTPUT
+
+          latest=$(curl -sL https://api.github.com/repos/Nriver/trilium-py/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          echo "latest=$latest" >> $GITHUB_OUTPUT
+          echo "Current: $current, Latest: $latest"
+
+      - name: Update PKGBUILD if needed
+        id: update
+        if: ${{ steps.trilium-version.outputs.latest != '' && steps.trilium-version.outputs.latest != steps.trilium-version.outputs.current }}
+        run: |
+          cd aur-repo
+          old=${{ steps.trilium-version.outputs.current }}
+          new=${{ steps.trilium-version.outputs.latest }}
+          echo "Updating PKGBUILD: $old -> $new"
+
+          sed -i "s/^pkgver=$old$/pkgver=$new/" PKGBUILD
+          sed -i "s/^pkgrel=.*$/pkgrel=1/" PKGBUILD
+
+          sed -i "s/^\tpkgver = $old$/\tpkgver = $new/" .SRCINFO
+          sed -i "s/^\tpkgrel = .*$/\tpkgrel = 1/" .SRCINFO
+
+          echo "updated=true" >> $GITHUB_OUTPUT
+
+      - name: Commit and push to GitHub
+        if: steps.update.outputs.updated == 'true'
+        run: |
+          cd aur-repo
+          git config user.name "tsaitang404"
+          git config user.email "tsaitang404@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "chore: bump to v${{ steps.trilium-version.outputs.latest }}"
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:master
+
+      - name: Push to AUR
+        if: steps.update.outputs.updated == 'true'
+        env:
+          AUR_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$AUR_KEY" ]; then
+            echo "AUR_SSH_PRIVATE_KEY not set, skipping AUR push"
+            exit 0
+          fi
+          cd aur-repo
+          mkdir -p ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          echo "$AUR_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          git remote add aur ssh://aur@aur.archlinux.org/python-trilium-py.git
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push aur master
+
+      - name: Create release
+        if: steps.update.outputs.updated == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.trilium-version.outputs.latest }}
+          name: "python-trilium-py v${{ steps.trilium-version.outputs.latest }}"
+          generate_release_notes: true

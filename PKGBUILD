@@ -3,7 +3,7 @@
 # Python client for Trilium Notes ETAPI + Web API, with extra features.
 
 pkgname=python-trilium-py
-pkgver=1.3.9
+pkgver=null
 pkgrel=1
 pkgdesc="Feature-rich Python client for interacting with the API and ETAPI of Trilium Notes"
 arch=('any')
